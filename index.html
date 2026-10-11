@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ETF Advisor">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#0f172a">
+<title>ETF Advisor PEA</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --txt:#0f172a; --mut:#64748b; --ac:#1d4ed8; --warn:#b45309; --ok:#15803d; --bad:#b91c1c; --line:#e2e8f0; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system, system-ui, sans-serif; background:var(--bg); color:var(--txt); -webkit-text-size-adjust:100%; }
+  header { position:sticky; top:0; background:var(--txt); color:#fff; padding:calc(env(safe-area-inset-top) + 12px) 16px 12px; display:flex; justify-content:space-between; align-items:center; z-index:2; }
+  header h1 { font-size:17px; margin:0; }
+  header button { background:none; border:1px solid #475569; color:#fff; border-radius:8px; padding:6px 10px; font-size:13px; }
+  main { padding:12px 12px 90px; max-width:720px; margin:0 auto; }
+  nav { position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid var(--line); display:flex; padding-bottom:env(safe-area-inset-bottom); z-index:2; }
+  nav button { flex:1; border:0; background:none; padding:10px 4px; font-size:12px; color:var(--mut); }
+  nav button.on { color:var(--ac); font-weight:600; }
+  .card { background:var(--card); border-radius:12px; padding:14px; margin-bottom:12px; box-shadow:0 1px 2px rgba(0,0,0,.05); }
+  h2 { font-size:18px; margin:4px 0 8px; }
+  .mut { color:var(--mut); font-size:13px; line-height:1.4; }
+  .warn { color:var(--warn); font-size:13px; }
+  .ok { color:var(--ok); }
+  .bad { color:var(--bad); }
+  label { display:block; font-size:13px; color:var(--mut); margin:10px 0 4px; }
+  input, select, textarea { width:100%; font-size:16px; padding:10px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; color:var(--txt); }
+  textarea { min-height:70px; }
+  button.primary { width:100%; background:var(--ac); color:#fff; border:0; border-radius:10px; padding:12px; font-size:16px; margin-top:12px; }
+  button.secondary { background:#fff; color:var(--ac); border:1px solid var(--ac); border-radius:10px; padding:10px; font-size:14px; width:100%; margin-top:8px; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .etf { border-top:1px solid var(--line); padding:10px 0; }
+  .etf:first-child { border-top:0; }
+  .etf b { font-size:15px; }
+  .num { font-variant-numeric:tabular-nums; }
+  .pill { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#e2e8f0; color:#334155; margin-right:4px; }
+  .alert { background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; border-radius:8px; padding:8px; margin-top:6px; font-size:13px; }
+  .metric { font-size:22px; font-weight:700; }
+  .login { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .login .card { width:100%; max-width:380px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<nav id="tabs" hidden></nav>
+
+<script>
+"use strict";
+
+/* ---------- Données : univers issu du PDF Fortuneo (snapshot 11/10/2026) ---------- */
+const UNIVERS = [
+  { ticker:"PTPXH", nom:"Amundi PEA Japon (TOPIX) DIS H", cat:"Japon", role:"Zone absente des contrats (couverte en euros)", cours:59.61, ytd:22.78, jour:0.74, frais:null, av:"Aucun" },
+  { ticker:"PTPXE", nom:"Amundi PEA Japon (TOPIX) DIS", cat:"Japon", role:"Alternative non couverte (exposition au yen)", cours:40.71, ytd:27.16, jour:0.66, frais:null, av:"Aucun" },
+  { ticker:"PINR", nom:"Amundi PEA Inde (MSCI India) ACC", cat:"Inde", role:"Zone absente des contrats", cours:21.54, ytd:-13.91, jour:1.56, frais:0.85, av:"Aucun", note:"Frais 0,85 % issu d'une source tierce, à vérifier" },
+  { ticker:"RS2K", nom:"Amundi Russell 2000 ACC", cat:"Petites capitalisations US", role:"Segment absent des contrats", cours:376.85, ytd:18.44, jour:1.50, frais:null, av:"Aucun" },
+  { ticker:"PASI", nom:"Amundi PEA Chine (MSCI China) ACC", cat:"Chine", role:"Exposition directe absente des contrats", cours:9.71, ytd:-9.21, jour:2.31, frais:null, av:"Partielle (émergents via M&G GEM et JPM EM)" },
+  { ticker:"CMSE", nom:"iShares Diversified Commodity Swap", cat:"Matières premières", role:"Diversification énergie, métaux, agricole", cours:37.87, ytd:40.14, jour:0.22, frais:null, av:"Faible (Invesco Energy Transition)", note:"Composition à vérifier" },
+  { ticker:"GUARD", nom:"BNP Paribas Easy Bloomberg Europe Defense ACC", cat:"Défense européenne", role:"Thème géopolitique", cours:10.64, ytd:-0.36, jour:1.45, frais:null, av:"Aucun" }
+];
+const ACTIONS = ["Renforcer","Conserver","Alléger","Surveiller","Ne pas acheter"];
+const STORE = "etfadv.v1";
+const ITER = 600000;
+const MIN_PWD = 12;
+
+/* ---------- État ---------- */
+const S = { key:null, salt:null, data:{ positions:{}, journal:[] }, tab:"univers" };
+const enc = new TextEncoder(), dec = new TextDecoder();
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = (v) => (v === "" || v == null || isNaN(Number(v))) ? null : Number(v);
+const eur = (v) => v == null ? "—" : Math.round(v).toLocaleString("fr-FR") + " €";
+const pct = (v, d=2) => v == null ? "—" : (v > 0 ? "+" : "") + v.toLocaleString("fr-FR", { minimumFractionDigits:d, maximumFractionDigits:d }) + " %";
+
+/* ---------- Chiffrement : PBKDF2-SHA256 + AES-GCM ---------- */
+const b64 = (u8) => btoa(String.fromCharCode(...u8));
+const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+async function deriveKey(pwd, salt) {
+  const base = await crypto.subtle.importKey("raw", enc.encode(pwd), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name:"PBKDF2", salt, iterations:ITER, hash:"SHA-256" },
+    base, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]);
+}
+
+async function persist() {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name:"AES-GCM", iv }, S.key, enc.encode(JSON.stringify(S.data)));
+  localStorage.setItem(STORE, JSON.stringify({ v:1, salt:b64(S.salt), iv:b64(iv), ct:b64(new Uint8Array(ct)) }));
+}
+
+async function unlock(pwd) {
+  const blob = JSON.parse(localStorage.getItem(STORE));
+  const salt = unb64(blob.salt);
+  const key = await deriveKey(pwd, salt);
+  const plain = await crypto.subtle.decrypt({ name:"AES-GCM", iv:unb64(blob.iv) }, key, unb64(blob.ct));
+  S.key = key; S.salt = salt; S.data = JSON.parse(dec.decode(plain));
+}
+
+async function createVault(pwd) {
+  S.salt = crypto.getRandomValues(new Uint8Array(16));
+  S.key = await deriveKey(pwd, S.salt);
+  S.data = { positions: defaultPositions(), journal: [] };
+  await persist();
+}
+
+function defaultPositions() {
+  const p = {};
+  UNIVERS.forEach(u => p[u.ticker] = { cible:null, montant:null, valeur:null, baisse:-15, hausse:25, ecart:5 });
+  return p;
+}
+
+/* ---------- Écran de connexion ---------- */
+function renderLogin(mode) {
+  $("#tabs").hidden = true;
+  const creation = mode === "create";
+  $("#app").innerHTML = `
+    <div class="login"><div class="card">
+      <h2>ETF Advisor PEA</h2>
+      <p class="mut">${creation
+        ? "Créez un mot de passe. Il chiffre vos données sur ce téléphone. Il n'est enregistré nulle part : s'il est perdu, les données sont irrécupérables."
+        : "Saisissez votre mot de passe pour déverrouiller."}</p>
+      <form id="login-form">
+        <label>Mot de passe</label>
+        <input id="pwd" type="password" autocomplete="${creation ? "new-password" : "current-password"}" required>
+        ${creation ? `<label>Confirmation</label><input id="pwd2" type="password" autocomplete="new-password" required>` : ""}
+        <button class="primary" type="submit">${creation ? "Créer" : "Déverrouiller"}</button>
+        <p id="msg" class="warn"></p>
+      </form>
+      ${creation ? "" : `<button class="secondary" id="restore">Restaurer une sauvegarde</button>`}
+      <input id="file" type="file" accept="application/json,.json" hidden>
+    </div></div>`;
+  $("#login-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const pwd = $("#pwd").value;
+    const msg = $("#msg");
+    try {
+      if (creation) {
+        if (pwd.length < MIN_PWD) return msg.textContent = `Au moins ${MIN_PWD} caractères.`;
+        if (pwd !== $("#pwd2").value) return msg.textContent = "Les deux saisies ne correspondent pas.";
+        msg.textContent = "Chiffrement en cours…";
+        await createVault(pwd);
+      } else {
+        msg.textContent = "Vérification…";
+        await unlock(pwd);
+      }
+      start();
+    } catch (err) {
+      msg.textContent = creation ? "Erreur de création." : "Mot de passe incorrect.";
+    }
+  };
+  if (!creation) {
+    $("#restore").onclick = () => $("#file").click();
+    $("#file").onchange = importBackup;
+  }
+}
+
+/* ---------- Sauvegarde chiffrée ---------- */
+function exportBackup() {
+  const blob = localStorage.getItem(STORE);
+  const url = URL.createObjectURL(new Blob([blob], { type:"application/json" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = "etf-advisor-sauvegarde.json";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function importBackup(e) {
+  const f = e.target.files[0];
+  if (!f) return;
+  const text = await f.text();
+  try {
+    const b = JSON.parse(text);
+    if (!b.salt || !b.iv || !b.ct) throw new Error("format");
+    localStorage.setItem(STORE, text);
+    alert("Sauvegarde restaurée. Saisissez le mot de passe de cette sauvegarde.");
+    S.key = null; renderLogin("unlock");
+  } catch { alert("Fichier de sauvegarde invalide."); }
+}
+
+/* ---------- Calcul des alertes (même logique que la version Python) ---------- */
+function computeAlerts() {
+  const rows = UNIVERS.map(u => {
+    const p = S.data.positions[u.ticker] || {};
+    return { ticker:u.ticker, cible:num(p.cible), montant:num(p.montant), valeur:num(p.valeur),
+             baisse:num(p.baisse), hausse:num(p.hausse), ecart:num(p.ecart) };
+  });
+  const total = rows.reduce((s, r) => s + (r.valeur ?? 0), 0);
+  rows.forEach(r => {
+    r.poids = (total && r.valeur != null) ? r.valeur / total * 100 : null;
+    r.ecartPoids = (r.poids != null && r.cible != null) ? r.poids - r.cible : null;
+    r.perf = (r.valeur != null && r.montant > 0) ? (r.valeur - r.montant) / r.montant * 100 : null;
+    r.msgs = [];
+    if (r.perf != null && r.baisse != null && r.perf <= r.baisse) r.msgs.push(`Baisse de ${Math.abs(r.perf).toFixed(1)} % depuis l'achat : revue à faire`);
+    else if (r.perf != null && r.hausse != null && r.perf >= r.hausse) r.msgs.push(`Hausse de ${r.perf.toFixed(1)} % depuis l'achat : revue à faire`);
+    if (r.ecartPoids != null && r.ecart != null && Math.abs(r.ecartPoids) >= r.ecart)
+      r.msgs.push(`Poids ${r.ecartPoids > 0 ? "au-dessus" : "en dessous"} de la cible de ${Math.abs(r.ecartPoids).toFixed(1)} points : rééquilibrage à examiner`);
+  });
+  return rows;
+}
+
+/* ---------- Vues ---------- */
+function viewUnivers() {
+  const cats = ["Toutes", ...new Set(UNIVERS.map(u => u.cat))];
+  const manquants = UNIVERS.filter(u => u.frais == null).length;
+  return `
+    <h2>Univers PEA</h2>
+    <p class="mut">Cours du PDF Fortuneo (snapshot 11/10/2026, date de cotation à confirmer). Pas de flux temps réel.</p>
+    <div class="card">
+      <label>Catégorie</label>
+      <select id="cat">${cats.map(c => `<option>${esc(c)}</option>`).join("")}</select>
+      <div id="list" style="margin-top:8px"></div>
+      <p class="warn">${manquants} ligne(s) sans frais annuels : à compléter sur la fiche produit Fortuneo.</p>
+    </div>`;
+}
+
+function listeUnivers(cat) {
+  return UNIVERS.filter(u => cat === "Toutes" || u.cat === cat).map(u => `
+    <div class="etf">
+      <b>${esc(u.ticker)}</b> <span class="mut">${esc(u.nom)}</span>
+      <div class="mut">${esc(u.role)}</div>
+      <div class="num" style="margin-top:4px">
+        <span class="pill">${u.cours.toLocaleString("fr-FR")} €</span>
+        <span class="pill ${u.ytd >= 0 ? "ok" : "bad"}">YTD ${pct(u.ytd)}</span>
+        <span class="pill">Jour ${pct(u.jour)}</span>
+        <span class="pill">Frais ${u.frais != null ? u.frais.toLocaleString("fr-FR") + " %" : "à compléter"}</span>
+      </div>
+      <div class="mut">Recouvrement assurance-vie : ${esc(u.av)}</div>
+      ${u.note ? `<div class="warn">${esc(u.note)}</div>` : ""}
+    </div>`).join("");
+}
+
+function viewSimulation() {
+  return `
+    <h2>Simulation : effet des frais</h2>
+    <p class="mut">Illustration uniquement. Le rendement est une hypothèse, pas une prévision.</p>
+    <div class="card">
+      <div class="row">
+        <div><label>Versement mensuel (€)</label><input id="s-v" type="number" value="300" inputmode="decimal"></div>
+        <div><label>Horizon (années)</label><input id="s-h" type="number" value="20" inputmode="numeric"></div>
+        <div><label>Rendement brut (%/an)</label><input id="s-r" type="number" value="6" step="0.5"></div>
+        <div><label>Courtage par ordre (€)</label><input id="s-c" type="number" value="1.95" step="0.05"></div>
+      </div>
+      <label>Frais annuels de l'ETF (%)</label><input id="s-t" type="number" value="0.25" step="0.01">
+    </div>
+    <div class="card" id="s-out"></div>`;
+}
+
+function calculSimulation() {
+  const v = num($("#s-v").value) ?? 0, h = Math.max(1, Math.round(num($("#s-h").value) ?? 1)),
+        r = num($("#s-r").value) ?? 0, c = num($("#s-c").value) ?? 0, t = num($("#s-t").value) ?? 0;
+  const mois = h * 12;
+  const tm = Math.pow(1 + r / 100, 1 / 12) - 1, tn = Math.pow(1 + (r - t) / 100, 1 / 12) - 1;
+  const fv = (taux, frais) => { let x = 0; for (let i = 0; i < mois; i++) x = (x + v - frais) * (1 + taux); return x; };
+  const brut = fv(tm, 0), net = fv(tn, c), investi = v * mois, gain = Math.max(net - investi, 0);
+  $("#s-out").innerHTML = `
+    <div class="mut">Total investi</div><div class="metric num">${eur(investi)}</div>
+    <div class="mut" style="margin-top:8px">Valeur sans frais</div><div class="metric num">${eur(brut)}</div>
+    <div class="mut" style="margin-top:8px">Valeur après frais</div><div class="metric num">${eur(net)}
+      <span class="bad" style="font-size:14px">(−${eur(brut - net)})</span></div>
+    <p class="mut" style="margin-top:12px">Impôt sur la plus-value : PEA après 5 ans ${eur(gain * 0.186)} (18,6 %) contre CTO ${eur(gain * 0.314)} (31,4 %). Taux à vérifier tous les 6 mois sur impots.gouv.fr.</p>`;
+}
+
+function viewSeuils() {
+  const rows = UNIVERS.map(u => {
+    const p = S.data.positions[u.ticker] || {};
+    const f = (k) => p[k] == null ? "" : p[k];
+    return `
+      <div class="etf">
+        <b>${esc(u.ticker)}</b> <span class="mut">${esc(u.nom)}</span>
+        <div class="row" style="margin-top:6px">
+          <div><label>Poids cible (%)</label><input data-k="cible" data-t="${u.ticker}" type="number" inputmode="decimal" value="${f("cible")}"></div>
+          <div><label>Montant investi (€)</label><input data-k="montant" data-t="${u.ticker}" type="number" inputmode="decimal" value="${f("montant")}"></div>
+          <div><label>Valeur actuelle (€)</label><input data-k="valeur" data-t="${u.ticker}" type="number" inputmode="decimal" value="${f("valeur")}"></div>
+          <div><label>Revue si baisse (%)</label><input data-k="baisse" data-t="${u.ticker}" type="number" value="${f("baisse")}"></div>
+          <div><label>Revue si hausse (%)</label><input data-k="hausse" data-t="${u.ticker}" type="number" value="${f("hausse")}"></div>
+          <div><label>Revue si écart (pts)</label><input data-k="ecart" data-t="${u.ticker}" type="number" value="${f("ecart")}"></div>
+        </div>
+      </div>`;
+  }).join("");
+  return `
+    <h2>Seuils de revue</h2>
+    <p class="mut">Saisissez les valeurs lues dans votre application Fortuneo. Les alertes signalent une revue ; elles ne vendent rien.</p>
+    <div class="card" id="pos-form">${rows}
+      <button class="primary" id="save-pos">Enregistrer les positions</button>
+      <p id="pos-msg" class="mut"></p>
+    </div>
+    <div class="card" id="alertes"></div>`;
+}
+
+function rendreAlertes() {
+  const rows = computeAlerts();
+  const actives = rows.filter(r => r.valeur != null);
+  if (!actives.length) { $("#alertes").innerHTML = `<p class="mut">Renseignez au moins une valeur actuelle pour afficher les alertes.</p>`; return; }
+  const totalCible = rows.reduce((s, r) => s + (r.cible ?? 0), 0);
+  const avertissement = rows.some(r => r.cible != null) && Math.round(totalCible) !== 100
+    ? `<p class="warn">Les poids cibles totalisent ${Math.round(totalCible)} % au lieu de 100 %.</p>` : "";
+  const lignes = rows.filter(r => r.valeur != null).map(r => `
+    <div class="etf"><b>${esc(r.ticker)}</b> <span class="num">${eur(r.valeur)}</span>
+      <div class="mut num">Poids ${r.poids != null ? r.poids.toFixed(1) : "—"} % · cible ${r.cible ?? "—"} % · perf ${pct(r.perf, 1)}</div>
+      ${r.msgs.map(m => `<div class="alert">${esc(m)}</div>`).join("")}
+    </div>`).join("");
+  const alertesOk = rows.some(r => r.msgs.length) ? "" : `<p class="ok">Aucun seuil franchi.</p>`;
+  $("#alertes").innerHTML = `<h2>Alertes</h2>${avertissement}${alertesOk}${lignes}`;
+}
+
+function viewJournal() {
+  const hist = [...S.data.journal].sort((a, b) => b.date.localeCompare(a.date));
+  return `
+    <h2>Journal de décisions</h2>
+    <p class="mut">Vous êtes seul décisionnaire. L'application enregistre votre choix ; elle n'exécute rien.</p>
+    <div class="card">
+      <form id="j-form">
+        <div class="row">
+          <div><label>ETF</label><select id="j-t">${UNIVERS.map(u => `<option>${u.ticker}</option>`).join("")}</select></div>
+          <div><label>Action</label><select id="j-a">${ACTIONS.map(a => `<option>${a}</option>`).join("")}</select></div>
+        </div>
+        <label>Montant envisagé (€)</label><input id="j-m" type="number" inputmode="decimal" value="0">
+        <label>Pourquoi cette décision ?</label><textarea id="j-j" required></textarea>
+        <label>Risques identifiés</label><textarea id="j-r"></textarea>
+        <label style="display:flex;gap:8px;align-items:center;color:var(--txt)"><input id="j-v" type="checkbox" style="width:auto"> Je valide cette décision et j'assume le choix.</label>
+        <button class="primary" type="submit">Enregistrer</button>
+        <p id="j-msg" class="warn"></p>
+      </form>
+    </div>
+    <h2>Historique</h2>
+    ${hist.length ? hist.map(e => `
+      <div class="card">
+        <div class="mut">${esc(e.date)} · <b>${esc(e.ticker)}</b> · ${esc(e.action)} · ${eur(e.montant)}</div>
+        <div>${esc(e.justification)}</div>
+        ${e.risques ? `<div class="mut">Risques : ${esc(e.risques)}</div>` : ""}
+      </div>`).join("") : `<p class="mut">Aucune décision enregistrée.</p>`}`;
+}
+
+/* ---------- Navigation et rendu ---------- */
+const TABS = [
+  ["univers", "Univers"], ["simulation", "Simulation"], ["seuils", "Seuils"], ["journal", "Journal"]
+];
+
+function renderTabs() {
+  const nav = $("#tabs");
+  nav.hidden = false;
+  nav.innerHTML = TABS.map(([k, label]) =>
+    `<button data-tab="${k}" class="${S.tab === k ? "on" : ""}">${label}</button>`).join("");
+  nav.querySelectorAll("button").forEach(b => b.onclick = () => { S.tab = b.dataset.tab; render(); });
+}
+
+function render() {
+  renderTabs();
+  const body = {
+    univers: viewUnivers, simulation: viewSimulation, seuils: viewSeuils, journal: viewJournal
+  }[S.tab]();
+  $("#app").innerHTML = `
+    <header><h1>ETF Advisor PEA</h1>
+      <div><button id="btn-save">Sauvegarder</button> <button id="btn-lock">Verrouiller</button></div>
+    </header>
+    <main>${body}</main>`;
+  $("#btn-save").onclick = exportBackup;
+  $("#btn-lock").onclick = () => { S.key = null; S.data = null; renderLogin("unlock"); };
+  bindTab();
+}
+
+function bindTab() {
+  if (S.tab === "univers") {
+    const sel = $("#cat"), list = () => $("#list").innerHTML = listeUnivers(sel.value);
+    sel.onchange = list; list();
+  }
+  if (S.tab === "simulation") {
+    document.querySelectorAll("#app input").forEach(i => i.oninput = calculSimulation);
+    calculSimulation();
+  }
+  if (S.tab === "seuils") {
+    rendreAlertes();
+    $("#save-pos").onclick = async () => {
+      document.querySelectorAll("#pos-form input[data-t]").forEach(i => {
+        const t = i.dataset.t, k = i.dataset.k;
+        S.data.positions[t] = S.data.positions[t] || {};
+        S.data.positions[t][k] = num(i.value);
+      });
+      await persist();
+      $("#pos-msg").textContent = "Positions enregistrées (chiffrées sur ce téléphone).";
+      rendreAlertes();
+    };
+  }
+  if (S.tab === "journal") {
+    $("#j-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const just = $("#j-j").value.trim();
+      if (!just) return $("#j-msg").textContent = "Renseignez la justification.";
+      if (!$("#j-v").checked) return $("#j-msg").textContent = "La validation est obligatoire.";
+      S.data.journal.push({
+        date: new Date().toISOString().slice(0, 10),
+        ticker: $("#j-t").value, action: $("#j-a").value,
+        montant: num($("#j-m").value) ?? 0, justification: just, risques: $("#j-r").value.trim()
+      });
+      await persist();
+      render();
+    };
+  }
+}
+
+function start() { render(); }
+
+/* ---------- Démarrage ---------- */
+if (!window.crypto || !window.crypto.subtle) {
+  $("#app").innerHTML = `<div class="login"><div class="card"><p class="warn">Cette page doit être ouverte en HTTPS (chiffrement indisponible en mode fichier local).</p></div></div>`;
+} else {
+  renderLogin(localStorage.getItem(STORE) ? "unlock" : "create");
+}
+</script>
+</body>
+</html>
