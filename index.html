@@ -213,7 +213,9 @@ function computeAlerts() {
   return rows;
 }
  
-/* ---------- Univers : consultation, ajout, retrait ---------- */
+/* ---------- Univers : consultation, ajout, modification, retrait ---------- */
+let EDITING = null; // ticker de la fiche en cours de modification
+ 
 function viewUnivers() {
   const cats = ["Toutes", ...new Set(univ().map(u => u.cat))];
   const manquants = univ().filter(u => u.frais == null).length;
@@ -243,7 +245,9 @@ function viewUnivers() {
             <div><label>Frais annuels (%)</label><input id="u-f" type="number" step="0.01" inputmode="decimal"></div>
           </div>
           <label>Recouvrement avec mes assurances-vie</label><input id="u-a" placeholder="ex. Aucun">
-          <button class="primary" type="submit">Ajouter</button>
+          <label>Note (facultatif : effacez-la quand l'information est vérifiée)</label><input id="u-note">
+          <button class="primary" type="submit" id="u-submit">Ajouter</button>
+          <button type="button" id="u-cancel" hidden>Annuler la modification</button>
           <p id="u-msg" class="warn"></p>
         </form>
       </details>
@@ -263,32 +267,70 @@ function listeUnivers(cat) {
       </div>
       <div class="mut">Recouvrement assurance-vie : ${esc(u.av || "Non renseigné")}</div>
       ${u.note ? `<div class="warn">${esc(u.note)}</div>` : ""}
+      <button data-edit="${esc(u.ticker)}">Modifier</button>
       <button class="danger" data-del="${esc(u.ticker)}">Retirer de l'univers</button>
     </div>`).join("");
 }
  
 function bindUnivers() {
   const sel = $("#cat");
-  const liste = () => { $("#list").innerHTML = listeUnivers(sel.value); bindDelete(); };
+  const liste = () => { $("#list").innerHTML = listeUnivers(sel.value); bindDelete(); bindEdit(); };
   sel.onchange = liste; liste();
  
   $("#u-form").onsubmit = async (e) => {
     e.preventDefault();
-    const ticker = $("#u-t").value.trim().toUpperCase();
+    const ticker = EDITING ?? $("#u-t").value.trim().toUpperCase();
     const msg = $("#u-msg");
     if (!ticker) return msg.textContent = "Le ticker est obligatoire.";
-    if (univ().some(u => u.ticker === ticker)) return msg.textContent = `${ticker} est déjà dans l'univers.`;
+    if (!EDITING && univ().some(u => u.ticker === ticker)) return msg.textContent = `${ticker} est déjà dans l'univers.`;
     const cours = num($("#u-p").value);
     if (cours == null) return msg.textContent = "Le cours est obligatoire.";
-    univ().push({
+    const fiche = {
       ticker, nom: $("#u-n").value.trim(), cat: $("#u-c").value.trim(), role: $("#u-r").value.trim(),
       cours, ytd: num($("#u-y").value), jour: num($("#u-j").value), frais: num($("#u-f").value),
-      av: $("#u-a").value.trim() || "Non renseigné"
-    });
-    S.data.positions[ticker] = { cible:null, montant:null, valeur:null, baisse:-15, hausse:25, ecart:5 };
+      av: $("#u-a").value.trim() || "Non renseigné", note: $("#u-note").value.trim() || undefined
+    };
+    if (EDITING) {
+      const i = univ().findIndex(u => u.ticker === EDITING);
+      if (i < 0) return msg.textContent = "ETF introuvable.";
+      univ()[i] = fiche; // les positions saisies sont conservées
+      resetForm();
+    } else {
+      univ().push(fiche);
+      S.data.positions[ticker] = { cible:null, montant:null, valeur:null, baisse:-15, hausse:25, ecart:5 };
+    }
     await persist();
     render();
   };
+}
+ 
+function resetForm() {
+  EDITING = null;
+  ["u-t","u-c","u-n","u-r","u-p","u-y","u-j","u-f","u-a","u-note"].forEach(id => $("#" + id).value = "");
+  $("#u-t").disabled = false;
+  $("#u-submit").textContent = "Ajouter";
+  $("#u-cancel").hidden = true;
+  $("#u-msg").textContent = "";
+}
+ 
+function bindEdit() {
+  document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => {
+    const u = univ().find(x => x.ticker === b.dataset.edit);
+    if (!u) return;
+    EDITING = u.ticker;
+    const det = document.querySelector("details");
+    det.open = true;
+    $("#u-t").value = u.ticker; $("#u-t").disabled = true;
+    $("#u-c").value = u.cat ?? ""; $("#u-n").value = u.nom ?? ""; $("#u-r").value = u.role ?? "";
+    $("#u-p").value = u.cours ?? ""; $("#u-y").value = u.ytd ?? ""; $("#u-j").value = u.jour ?? "";
+    $("#u-f").value = u.frais ?? ""; $("#u-a").value = (u.av === "Non renseigné" ? "" : u.av ?? "");
+    $("#u-note").value = u.note ?? "";
+    $("#u-submit").textContent = "Enregistrer les modifications";
+    $("#u-cancel").hidden = false;
+    $("#u-msg").textContent = "";
+    det.scrollIntoView?.({ behavior: "smooth" });
+  });
+  $("#u-cancel").onclick = resetForm;
 }
  
 function bindDelete() {
