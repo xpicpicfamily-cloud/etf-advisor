@@ -17,7 +17,7 @@
   header button { background:none; border:1px solid #475569; color:#fff; border-radius:8px; padding:6px 10px; font-size:13px; }
   main { padding:12px 12px 90px; max-width:720px; margin:0 auto; }
   nav { position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid var(--line); display:flex; padding-bottom:env(safe-area-inset-bottom); z-index:2; }
-  nav button { flex:1; border:0; background:none; padding:10px 4px; font-size:12px; color:var(--mut); }
+  nav button { flex:1; border:0; background:none; padding:10px 2px; font-size:12px; color:var(--mut); }
   nav button.on { color:var(--ac); font-weight:600; }
   .card { background:var(--card); border-radius:12px; padding:14px; margin-bottom:12px; box-shadow:0 1px 2px rgba(0,0,0,.05); }
   h2 { font-size:18px; margin:4px 0 8px; }
@@ -30,27 +30,30 @@
   textarea { min-height:70px; }
   button.primary { width:100%; background:var(--ac); color:#fff; border:0; border-radius:10px; padding:12px; font-size:16px; margin-top:12px; }
   button.secondary { background:#fff; color:var(--ac); border:1px solid var(--ac); border-radius:10px; padding:10px; font-size:14px; width:100%; margin-top:8px; }
+  button.danger { background:#fff; color:var(--bad); border:1px solid var(--bad); border-radius:8px; padding:6px 10px; font-size:13px; margin-top:6px; }
   .row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
   .etf { border-top:1px solid var(--line); padding:10px 0; }
   .etf:first-child { border-top:0; }
   .etf b { font-size:15px; }
   .num { font-variant-numeric:tabular-nums; }
-  .pill { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#e2e8f0; color:#334155; margin-right:4px; }
+  .pill { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#e2e8f0; color:#334155; margin:0 4px 4px 0; }
   .alert { background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; border-radius:8px; padding:8px; margin-top:6px; font-size:13px; }
   .metric { font-size:22px; font-weight:700; }
   .login { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
   .login .card { width:100%; max-width:380px; }
+  details summary { cursor:pointer; color:var(--ac); font-size:14px; margin:8px 0; }
+  .report { white-space:pre-wrap; font-size:14px; line-height:1.5; }
 </style>
 </head>
 <body>
 <div id="app"></div>
 <nav id="tabs" hidden></nav>
-
+ 
 <script>
 "use strict";
-
-/* ---------- Données : univers issu du PDF Fortuneo (snapshot 11/10/2026) ---------- */
-const UNIVERS = [
+ 
+/* ---------- Univers de départ (PDF Fortuneo, snapshot 11/10/2026) ---------- */
+const DEFAULT_UNIVERS = [
   { ticker:"PTPXH", nom:"Amundi PEA Japon (TOPIX) DIS H", cat:"Japon", role:"Zone absente des contrats (couverte en euros)", cours:59.61, ytd:22.78, jour:0.74, frais:null, av:"Aucun" },
   { ticker:"PTPXE", nom:"Amundi PEA Japon (TOPIX) DIS", cat:"Japon", role:"Alternative non couverte (exposition au yen)", cours:40.71, ytd:27.16, jour:0.66, frais:null, av:"Aucun" },
   { ticker:"PINR", nom:"Amundi PEA Inde (MSCI India) ACC", cat:"Inde", role:"Zone absente des contrats", cours:21.54, ytd:-13.91, jour:1.56, frais:0.85, av:"Aucun", note:"Frais 0,85 % issu d'une source tierce, à vérifier" },
@@ -63,54 +66,64 @@ const ACTIONS = ["Renforcer","Conserver","Alléger","Surveiller","Ne pas acheter
 const STORE = "etfadv.v1";
 const ITER = 600000;
 const MIN_PWD = 12;
-
+ 
 /* ---------- État ---------- */
-const S = { key:null, salt:null, data:{ positions:{}, journal:[] }, tab:"univers" };
+const S = { key:null, salt:null, data:null, tab:"univers" };
 const enc = new TextEncoder(), dec = new TextDecoder();
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const num = (v) => (v === "" || v == null || isNaN(Number(v))) ? null : Number(v);
 const eur = (v) => v == null ? "—" : Math.round(v).toLocaleString("fr-FR") + " €";
-const pct = (v, d=2) => v == null ? "—" : (v > 0 ? "+" : "") + v.toLocaleString("fr-FR", { minimumFractionDigits:d, maximumFractionDigits:d }) + " %";
-
+const fr = (v, d=2) => v == null ? "—" : v.toLocaleString("fr-FR", { minimumFractionDigits:d, maximumFractionDigits:d });
+const pct = (v, d=2) => v == null ? "—" : (v > 0 ? "+" : "") + fr(v, d) + " %";
+const univ = () => S.data.univers;
+const today = () => new Date().toISOString().slice(0, 10);
+ 
+function freshData() {
+  return { univers: JSON.parse(JSON.stringify(DEFAULT_UNIVERS)), positions: {}, journal: [], veille: [] };
+}
+ 
+/* Complète les données anciennes (versions précédentes) sans rien effacer. */
+function migrate(d) {
+  if (!d.univers) d.univers = JSON.parse(JSON.stringify(DEFAULT_UNIVERS));
+  if (!d.positions) d.positions = {};
+  if (!d.journal) d.journal = [];
+  if (!d.veille) d.veille = [];
+  return d;
+}
+ 
 /* ---------- Chiffrement : PBKDF2-SHA256 + AES-GCM ---------- */
 const b64 = (u8) => btoa(String.fromCharCode(...u8));
 const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-
+ 
 async function deriveKey(pwd, salt) {
   const base = await crypto.subtle.importKey("raw", enc.encode(pwd), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
     { name:"PBKDF2", salt, iterations:ITER, hash:"SHA-256" },
     base, { name:"AES-GCM", length:256 }, false, ["encrypt","decrypt"]);
 }
-
+ 
 async function persist() {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = await crypto.subtle.encrypt({ name:"AES-GCM", iv }, S.key, enc.encode(JSON.stringify(S.data)));
   localStorage.setItem(STORE, JSON.stringify({ v:1, salt:b64(S.salt), iv:b64(iv), ct:b64(new Uint8Array(ct)) }));
 }
-
+ 
 async function unlock(pwd) {
   const blob = JSON.parse(localStorage.getItem(STORE));
   const salt = unb64(blob.salt);
   const key = await deriveKey(pwd, salt);
   const plain = await crypto.subtle.decrypt({ name:"AES-GCM", iv:unb64(blob.iv) }, key, unb64(blob.ct));
-  S.key = key; S.salt = salt; S.data = JSON.parse(dec.decode(plain));
+  S.key = key; S.salt = salt; S.data = migrate(JSON.parse(dec.decode(plain)));
 }
-
+ 
 async function createVault(pwd) {
   S.salt = crypto.getRandomValues(new Uint8Array(16));
   S.key = await deriveKey(pwd, S.salt);
-  S.data = { positions: defaultPositions(), journal: [] };
+  S.data = freshData();
   await persist();
 }
-
-function defaultPositions() {
-  const p = {};
-  UNIVERS.forEach(u => p[u.ticker] = { cible:null, montant:null, valeur:null, baisse:-15, hausse:25, ecart:5 });
-  return p;
-}
-
+ 
 /* ---------- Écran de connexion ---------- */
 function renderLogin(mode) {
   $("#tabs").hidden = true;
@@ -155,7 +168,7 @@ function renderLogin(mode) {
     $("#file").onchange = importBackup;
   }
 }
-
+ 
 /* ---------- Sauvegarde chiffrée ---------- */
 function exportBackup() {
   const blob = localStorage.getItem(STORE);
@@ -165,7 +178,7 @@ function exportBackup() {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-
+ 
 async function importBackup(e) {
   const f = e.target.files[0];
   if (!f) return;
@@ -178,10 +191,10 @@ async function importBackup(e) {
     S.key = null; renderLogin("unlock");
   } catch { alert("Fichier de sauvegarde invalide."); }
 }
-
-/* ---------- Calcul des alertes (même logique que la version Python) ---------- */
+ 
+/* ---------- Calcul des alertes ---------- */
 function computeAlerts() {
-  const rows = UNIVERS.map(u => {
+  const rows = univ().map(u => {
     const p = S.data.positions[u.ticker] || {};
     return { ticker:u.ticker, cible:num(p.cible), montant:num(p.montant), valeur:num(p.valeur),
              baisse:num(p.baisse), hausse:num(p.hausse), ecart:num(p.ecart) };
@@ -199,38 +212,97 @@ function computeAlerts() {
   });
   return rows;
 }
-
-/* ---------- Vues ---------- */
+ 
+/* ---------- Univers : consultation, ajout, retrait ---------- */
 function viewUnivers() {
-  const cats = ["Toutes", ...new Set(UNIVERS.map(u => u.cat))];
-  const manquants = UNIVERS.filter(u => u.frais == null).length;
+  const cats = ["Toutes", ...new Set(univ().map(u => u.cat))];
+  const manquants = univ().filter(u => u.frais == null).length;
   return `
     <h2>Univers PEA</h2>
-    <p class="mut">Cours du PDF Fortuneo (snapshot 11/10/2026, date de cotation à confirmer). Pas de flux temps réel.</p>
+    <p class="mut">Les cours sont ceux que vous saisissez. Ils ne sont pas mis à jour automatiquement : vérifiez-les dans Fortuneo.</p>
     <div class="card">
       <label>Catégorie</label>
       <select id="cat">${cats.map(c => `<option>${esc(c)}</option>`).join("")}</select>
       <div id="list" style="margin-top:8px"></div>
       <p class="warn">${manquants} ligne(s) sans frais annuels : à compléter sur la fiche produit Fortuneo.</p>
+    </div>
+    <div class="card">
+      <details>
+        <summary>+ Ajouter un ETF à l'univers</summary>
+        <form id="u-form">
+          <div class="row">
+            <div><label>Ticker</label><input id="u-t" required maxlength="10" placeholder="ex. EWLD"></div>
+            <div><label>Catégorie</label><input id="u-c" required placeholder="ex. Monde"></div>
+          </div>
+          <label>Nom complet</label><input id="u-n" required>
+          <label>Rôle dans le portefeuille</label><input id="u-r" placeholder="ex. Cœur monde">
+          <div class="row">
+            <div><label>Cours (€)</label><input id="u-p" type="number" step="0.01" inputmode="decimal" required></div>
+            <div><label>Perf. YTD (%)</label><input id="u-y" type="number" step="0.01" inputmode="decimal"></div>
+            <div><label>Var. jour (%)</label><input id="u-j" type="number" step="0.01" inputmode="decimal"></div>
+            <div><label>Frais annuels (%)</label><input id="u-f" type="number" step="0.01" inputmode="decimal"></div>
+          </div>
+          <label>Recouvrement avec mes assurances-vie</label><input id="u-a" placeholder="ex. Aucun">
+          <button class="primary" type="submit">Ajouter</button>
+          <p id="u-msg" class="warn"></p>
+        </form>
+      </details>
     </div>`;
 }
-
+ 
 function listeUnivers(cat) {
-  return UNIVERS.filter(u => cat === "Toutes" || u.cat === cat).map(u => `
+  return univ().filter(u => cat === "Toutes" || u.cat === cat).map(u => `
     <div class="etf">
       <b>${esc(u.ticker)}</b> <span class="mut">${esc(u.nom)}</span>
-      <div class="mut">${esc(u.role)}</div>
+      <div class="mut">${esc(u.role || "")}</div>
       <div class="num" style="margin-top:4px">
-        <span class="pill">${u.cours.toLocaleString("fr-FR")} €</span>
+        <span class="pill">${fr(u.cours)} €</span>
         <span class="pill ${u.ytd >= 0 ? "ok" : "bad"}">YTD ${pct(u.ytd)}</span>
         <span class="pill">Jour ${pct(u.jour)}</span>
-        <span class="pill">Frais ${u.frais != null ? u.frais.toLocaleString("fr-FR") + " %" : "à compléter"}</span>
+        <span class="pill">Frais ${u.frais != null ? fr(u.frais) + " %" : "à compléter"}</span>
       </div>
-      <div class="mut">Recouvrement assurance-vie : ${esc(u.av)}</div>
+      <div class="mut">Recouvrement assurance-vie : ${esc(u.av || "Non renseigné")}</div>
       ${u.note ? `<div class="warn">${esc(u.note)}</div>` : ""}
+      <button class="danger" data-del="${esc(u.ticker)}">Retirer de l'univers</button>
     </div>`).join("");
 }
-
+ 
+function bindUnivers() {
+  const sel = $("#cat");
+  const liste = () => { $("#list").innerHTML = listeUnivers(sel.value); bindDelete(); };
+  sel.onchange = liste; liste();
+ 
+  $("#u-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const ticker = $("#u-t").value.trim().toUpperCase();
+    const msg = $("#u-msg");
+    if (!ticker) return msg.textContent = "Le ticker est obligatoire.";
+    if (univ().some(u => u.ticker === ticker)) return msg.textContent = `${ticker} est déjà dans l'univers.`;
+    const cours = num($("#u-p").value);
+    if (cours == null) return msg.textContent = "Le cours est obligatoire.";
+    univ().push({
+      ticker, nom: $("#u-n").value.trim(), cat: $("#u-c").value.trim(), role: $("#u-r").value.trim(),
+      cours, ytd: num($("#u-y").value), jour: num($("#u-j").value), frais: num($("#u-f").value),
+      av: $("#u-a").value.trim() || "Non renseigné"
+    });
+    S.data.positions[ticker] = { cible:null, montant:null, valeur:null, baisse:-15, hausse:25, ecart:5 };
+    await persist();
+    render();
+  };
+}
+ 
+function bindDelete() {
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    const t = b.dataset.del;
+    if (!confirm(`Retirer ${t} de l'univers ? Les positions saisies pour cet ETF seront supprimées. Le journal est conservé.`)) return;
+    S.data.univers = univ().filter(u => u.ticker !== t);
+    delete S.data.positions[t];
+    await persist();
+    render();
+  });
+}
+ 
+/* ---------- Simulation ---------- */
 function viewSimulation() {
   return `
     <h2>Simulation : effet des frais</h2>
@@ -246,7 +318,7 @@ function viewSimulation() {
     </div>
     <div class="card" id="s-out"></div>`;
 }
-
+ 
 function calculSimulation() {
   const v = num($("#s-v").value) ?? 0, h = Math.max(1, Math.round(num($("#s-h").value) ?? 1)),
         r = num($("#s-r").value) ?? 0, c = num($("#s-c").value) ?? 0, t = num($("#s-t").value) ?? 0;
@@ -261,9 +333,10 @@ function calculSimulation() {
       <span class="bad" style="font-size:14px">(−${eur(brut - net)})</span></div>
     <p class="mut" style="margin-top:12px">Impôt sur la plus-value : PEA après 5 ans ${eur(gain * 0.186)} (18,6 %) contre CTO ${eur(gain * 0.314)} (31,4 %). Taux à vérifier tous les 6 mois sur impots.gouv.fr.</p>`;
 }
-
+ 
+/* ---------- Seuils ---------- */
 function viewSeuils() {
-  const rows = UNIVERS.map(u => {
+  const rows = univ().map(u => {
     const p = S.data.positions[u.ticker] || {};
     const f = (k) => p[k] == null ? "" : p[k];
     return `
@@ -282,17 +355,54 @@ function viewSeuils() {
   return `
     <h2>Seuils de revue</h2>
     <p class="mut">Saisissez les valeurs lues dans votre application Fortuneo. Les alertes signalent une revue ; elles ne vendent rien.</p>
-    <div class="card" id="pos-form">${rows}
-      <button class="primary" id="save-pos">Enregistrer les positions</button>
+    <div class="card" id="pos-form">${rows || '<p class="mut">Univers vide : ajoutez un ETF dans l\'onglet Univers.</p>'}
+      ${rows ? '<button class="primary" id="save-pos">Enregistrer les positions</button>' : ""}
       <p id="pos-msg" class="mut"></p>
     </div>
-    <div class="card" id="alertes"></div>`;
+    <div class="card" id="alertes"></div>
+    <div class="card" id="rebal"></div>`;
 }
-
+ 
+let APPORT = 0; // apport à répartir, non enregistré (saisi à chaque session)
+ 
+/* Montant à acheter ou à vendre pour atteindre les poids cibles (calcul indicatif). */
+function calculRebal(rows, apport) {
+  const actifs = rows.filter(r => r.cible != null);
+  if (!actifs.length) return `<p class="mut">Renseignez les poids cibles pour calculer le rééquilibrage.</p>`;
+  const totalCible = rows.reduce((s, r) => s + (r.cible ?? 0), 0);
+  const base = rows.reduce((s, r) => s + (r.valeur ?? 0), 0);
+  const cibleTot = base + (apport || 0);
+  let html = "";
+  if (Math.round(totalCible) !== 100)
+    html += `<p class="warn">Les poids cibles totalisent ${Math.round(totalCible)} % : corrigez-les avant d'utiliser ce calcul.</p>`;
+  html += actifs.map(r => {
+    const valeur = r.valeur ?? 0;
+    const cibleEur = r.cible / 100 * cibleTot;
+    const delta = cibleEur - valeur;
+    const action = Math.abs(delta) < 1 ? "Rien à faire"
+      : delta > 0 ? `Acheter ${eur(delta)}` : `Vendre ${eur(-delta)}`;
+    return `<div class="etf"><b>${esc(r.ticker)}</b> <span class="num">${action}</span>
+      <div class="mut num">Actuel ${eur(valeur)} · cible ${r.cible} % soit ${eur(cibleEur)}</div></div>`;
+  }).join("");
+  html += `<p class="mut">Calcul indicatif, frais de courtage et fiscalité non inclus. Aucun ordre n'est passé : la décision vous revient.</p>`;
+  return html;
+}
+ 
+function rendreRebal(rows) {
+  $("#rebal").innerHTML = `<h2>Rééquilibrage</h2>
+    <label>Apport à répartir (€), facultatif</label>
+    <input id="apport" type="number" inputmode="decimal" value="${APPORT || ""}">
+    <div id="rebal-res">${calculRebal(rows, APPORT)}</div>`;
+  $("#apport").oninput = (e) => {
+    APPORT = num(e.target.value) ?? 0;
+    $("#rebal-res").innerHTML = calculRebal(rows, APPORT);
+  };
+}
+ 
 function rendreAlertes() {
   const rows = computeAlerts();
-  const actives = rows.filter(r => r.valeur != null);
-  if (!actives.length) { $("#alertes").innerHTML = `<p class="mut">Renseignez au moins une valeur actuelle pour afficher les alertes.</p>`; return; }
+  rendreRebal(rows);
+  if (!rows.some(r => r.valeur != null)) { $("#alertes").innerHTML = `<p class="mut">Renseignez au moins une valeur actuelle pour afficher les alertes.</p>`; return; }
   const totalCible = rows.reduce((s, r) => s + (r.cible ?? 0), 0);
   const avertissement = rows.some(r => r.cible != null) && Math.round(totalCible) !== 100
     ? `<p class="warn">Les poids cibles totalisent ${Math.round(totalCible)} % au lieu de 100 %.</p>` : "";
@@ -304,7 +414,8 @@ function rendreAlertes() {
   const alertesOk = rows.some(r => r.msgs.length) ? "" : `<p class="ok">Aucun seuil franchi.</p>`;
   $("#alertes").innerHTML = `<h2>Alertes</h2>${avertissement}${alertesOk}${lignes}`;
 }
-
+ 
+/* ---------- Journal ---------- */
 function viewJournal() {
   const hist = [...S.data.journal].sort((a, b) => b.date.localeCompare(a.date));
   return `
@@ -313,7 +424,7 @@ function viewJournal() {
     <div class="card">
       <form id="j-form">
         <div class="row">
-          <div><label>ETF</label><select id="j-t">${UNIVERS.map(u => `<option>${u.ticker}</option>`).join("")}</select></div>
+          <div><label>ETF</label><select id="j-t">${univ().map(u => `<option>${esc(u.ticker)}</option>`).join("")}</select></div>
           <div><label>Action</label><select id="j-a">${ACTIONS.map(a => `<option>${a}</option>`).join("")}</select></div>
         </div>
         <label>Montant envisagé (€)</label><input id="j-m" type="number" inputmode="decimal" value="0">
@@ -332,12 +443,52 @@ function viewJournal() {
         ${e.risques ? `<div class="mut">Risques : ${esc(e.risques)}</div>` : ""}
       </div>`).join("") : `<p class="mut">Aucune décision enregistrée.</p>`}`;
 }
-
+ 
+/* ---------- Veille : rapports d'analyse collés depuis l'extérieur ---------- */
+function viewVeille() {
+  const items = [...S.data.veille].sort((a, b) => b.date.localeCompare(a.date));
+  return `
+    <h2>Veille : rapports d'analyse</h2>
+    <p class="mut">Collez ici le rapport reçu par e-mail. Il est sauvegardé chiffré sur ce téléphone, avec le reste.</p>
+    <div class="card">
+      <form id="v-form">
+        <label>Titre</label><input id="v-t" placeholder="ex. Synthèse de la semaine du 13/10" required>
+        <label>Texte du rapport</label><textarea id="v-x" style="min-height:160px" required></textarea>
+        <button class="primary" type="submit">Enregistrer le rapport</button>
+        <p id="v-msg" class="warn"></p>
+      </form>
+    </div>
+    ${items.length ? items.map((it, i) => `
+      <div class="card">
+        <div class="mut">${esc(it.date)}</div>
+        <b>${esc(it.titre)}</b>
+        <details><summary>Lire le rapport</summary><div class="report">${esc(it.texte)}</div></details>
+        <button class="danger" data-vdel="${it.id}">Supprimer</button>
+      </div>`).join("") : `<p class="mut">Aucun rapport enregistré.</p>`}`;
+}
+ 
+function bindVeille() {
+  $("#v-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const titre = $("#v-t").value.trim(), texte = $("#v-x").value.trim();
+    if (!titre || !texte) return $("#v-msg").textContent = "Titre et texte sont obligatoires.";
+    S.data.veille.push({ id: Date.now(), date: today(), titre, texte });
+    await persist();
+    render();
+  };
+  document.querySelectorAll("[data-vdel]").forEach(b => b.onclick = async () => {
+    if (!confirm("Supprimer ce rapport ?")) return;
+    S.data.veille = S.data.veille.filter(x => String(x.id) !== b.dataset.vdel);
+    await persist();
+    render();
+  });
+}
+ 
 /* ---------- Navigation et rendu ---------- */
 const TABS = [
-  ["univers", "Univers"], ["simulation", "Simulation"], ["seuils", "Seuils"], ["journal", "Journal"]
+  ["univers", "Univers"], ["simulation", "Simulation"], ["seuils", "Seuils"], ["veille", "Veille"], ["journal", "Journal"]
 ];
-
+ 
 function renderTabs() {
   const nav = $("#tabs");
   nav.hidden = false;
@@ -345,11 +496,11 @@ function renderTabs() {
     `<button data-tab="${k}" class="${S.tab === k ? "on" : ""}">${label}</button>`).join("");
   nav.querySelectorAll("button").forEach(b => b.onclick = () => { S.tab = b.dataset.tab; render(); });
 }
-
+ 
 function render() {
   renderTabs();
   const body = {
-    univers: viewUnivers, simulation: viewSimulation, seuils: viewSeuils, journal: viewJournal
+    univers: viewUnivers, simulation: viewSimulation, seuils: viewSeuils, veille: viewVeille, journal: viewJournal
   }[S.tab]();
   $("#app").innerHTML = `
     <header><h1>ETF Advisor PEA</h1>
@@ -360,19 +511,17 @@ function render() {
   $("#btn-lock").onclick = () => { S.key = null; S.data = null; renderLogin("unlock"); };
   bindTab();
 }
-
+ 
 function bindTab() {
-  if (S.tab === "univers") {
-    const sel = $("#cat"), list = () => $("#list").innerHTML = listeUnivers(sel.value);
-    sel.onchange = list; list();
-  }
+  if (S.tab === "univers") bindUnivers();
   if (S.tab === "simulation") {
     document.querySelectorAll("#app input").forEach(i => i.oninput = calculSimulation);
     calculSimulation();
   }
   if (S.tab === "seuils") {
     rendreAlertes();
-    $("#save-pos").onclick = async () => {
+    const save = $("#save-pos");
+    if (save) save.onclick = async () => {
       document.querySelectorAll("#pos-form input[data-t]").forEach(i => {
         const t = i.dataset.t, k = i.dataset.k;
         S.data.positions[t] = S.data.positions[t] || {};
@@ -383,6 +532,7 @@ function bindTab() {
       rendreAlertes();
     };
   }
+  if (S.tab === "veille") bindVeille();
   if (S.tab === "journal") {
     $("#j-form").onsubmit = async (e) => {
       e.preventDefault();
@@ -390,7 +540,7 @@ function bindTab() {
       if (!just) return $("#j-msg").textContent = "Renseignez la justification.";
       if (!$("#j-v").checked) return $("#j-msg").textContent = "La validation est obligatoire.";
       S.data.journal.push({
-        date: new Date().toISOString().slice(0, 10),
+        date: today(),
         ticker: $("#j-t").value, action: $("#j-a").value,
         montant: num($("#j-m").value) ?? 0, justification: just, risques: $("#j-r").value.trim()
       });
@@ -399,9 +549,9 @@ function bindTab() {
     };
   }
 }
-
+ 
 function start() { render(); }
-
+ 
 /* ---------- Démarrage ---------- */
 if (!window.crypto || !window.crypto.subtle) {
   $("#app").innerHTML = `<div class="login"><div class="card"><p class="warn">Cette page doit être ouverte en HTTPS (chiffrement indisponible en mode fichier local).</p></div></div>`;
@@ -411,3 +561,4 @@ if (!window.crypto || !window.crypto.subtle) {
 </script>
 </body>
 </html>
+ 
